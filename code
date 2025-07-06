@@ -1,0 +1,122 @@
+import os
+import librosa
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from tensorflow.keras import layers, models, utils
+
+DATA_PATH = ""
+SAMPLE_RATE = 22050
+DURATION = 3
+N_MFCC = 40
+TARGET_LENGTH = 130
+
+ def extract_label(filename):
+    emotion_map = {
+        'angry': 'angry',
+        'disgust': 'disgust',
+        'fear': 'fear',
+        'happy': 'happy',
+        'neutral': 'neutral',
+        'ps': 'pleasant_surprise',
+        'sad': 'sad'
+    }
+    for key in emotion_map:
+        if key in filename.lower():
+            return emotion_map[key]
+    return 'unknown'
+
+  def extract_features(file_path):
+    signal, sr = librosa.load(file_path, sr=SAMPLE_RATE, duration=DURATION)
+    mfccs = librosa.feature.mfcc(y=signal, sr=sr, n_mfcc=N_MFCC).T
+
+    if mfccs.shape[0] < TARGET_LENGTH:
+        pad_width = TARGET_LENGTH - mfccs.shape[0]
+        mfccs = np.pad(mfccs, pad_width=((0, pad_width), (0, 0)), mode='constant')
+    else:
+        mfccs = mfccs[:TARGET_LENGTH]
+    return mfccs
+
+  features = []
+labels = []
+
+for root, dirs, files in os.walk(DATA_PATH):
+    for file in files:
+        if file.endswith(".wav"):
+            file_path = os.path.join(root, file)
+            label = extract_label(file)
+            if label != 'unknown':
+                mfcc = extract_features(file_path)
+                features.append(mfcc)
+                labels.append(label)
+
+print(f"Loaded {len(features)} samples.")
+
+X = np.array(features)
+y = np.array(labels)
+
+encoder = LabelEncoder()
+y_encoded = encoder.fit_transform(y)
+y_onehot = utils.to_categorical(y_encoded)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y_onehot, test_size=0.2, random_state=42)
+
+X_train_cnn = X_train.reshape(X_train.shape[0], TARGET_LENGTH, N_MFCC, 1)
+X_test_cnn = X_test.reshape(X_test.shape[0], TARGET_LENGTH, N_MFCC, 1)
+
+print("Input shape:", X_train_cnn.shape)
+print("Number of classes:", len(encoder.classes_))
+
+model = models.Sequential([
+    layers.Input(shape=(TARGET_LENGTH, N_MFCC, 1)),
+    layers.Conv2D(32, (3,3), activation='relu'),
+    layers.MaxPooling2D((2,2)),
+    layers.Conv2D(64, (3,3), activation='relu'),
+    layers.MaxPooling2D((2,2)),
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.3),
+    layers.Dense(len(encoder.classes_), activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+model.summary()
+
+history = model.fit(X_train_cnn, y_train,
+                    epochs=20,
+                    batch_size=32,
+                    validation_data=(X_test_cnn, y_test))
+
+
+test_loss, test_accuracy = model.evaluate(X_test_cnn, y_test)
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+
+plt.figure(figsize=(8,5))
+plt.plot(history.history['accuracy'], label='Train Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+def predict_emotion(file_path):
+    signal, sr = librosa.load(file_path, sr=SAMPLE_RATE, duration=DURATION)
+    mfccs = librosa.feature.mfcc(y=signal, sr=sr, n_mfcc=N_MFCC).T
+
+    if mfccs.shape[0] < TARGET_LENGTH:
+        pad_width = TARGET_LENGTH - mfccs.shape[0]
+        mfccs = np.pad(mfccs, pad_width=((0, pad_width), (0, 0)), mode='constant')
+    else:
+        mfccs = mfccs[:TARGET_LENGTH]
+
+    input_data = mfccs.reshape(1, TARGET_LENGTH, N_MFCC, 1)
+    prediction = model.predict(input_data)
+    predicted_label = encoder.classes_[np.argmax(prediction)]
+
+    print(f"🔈 Predicted Emotion: {predicted_label}")
+    return predicted_label
+
+  predict_emotion("")
